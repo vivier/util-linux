@@ -156,6 +156,10 @@ implies creating a new mount namespace since the /proc mount would otherwise
 mess up existing programs on the system.  The new proc filesystem is explicitly
 mounted as private (with MS_PRIVATE|MS_REC).
 .TP
+.BR \-\-mount\-binfmt [ =\fImountpoint ]
+Just before running the program, mount the binfmt_misc filesystem at \fImountpoint\fP
+(default is /proc/sys/fs/binfmt_misc).  It also implies creating a new mount namespace since the binfmt_misc mount would otherwise mess up existing programs on the system.  The new binfmt_misc filesystem is explicitly mounted as private (with MS_PRIVATE|MS_REC).
+.TP
 .BR \-r , " \-\-map\-root\-user"
 Run the program only after the current effective user and group IDs have been mapped to
 the superuser UID and GID in the newly created user namespace.  This makes it possible to
@@ -207,6 +211,10 @@ Set the user ID which will be used in the entered namespace.
 .BR \-G, "\-\-setgid \fIgid"
 Set the group ID which will be used in the entered namespace and drop
 supplementary groups.
+.TP
+.BR \-l , "\-\-load\-interp=\fIstring"
+Load binfmt_misc definition in the namespace
+(implies --mount-binfmt)
 .TP
 .BR \-V , " \-\-version"
 Display version information and exit.
@@ -269,6 +277,13 @@ Reliable killing of subprocesses of the \fIprogram\fR.
 When \fBunshare\fR gets killed, everything below it gets killed as well.
 Without it, the children of \fIprogram\fR would have orphaned and
 been re-parented to PID 1.
+.TP
+.B $ unshare --map-root-user --fork --pid --load-interp=":qemu-ppc:M::\\x7fELF\x01\\x02\\x01\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x02\\x00\\x14:\\xff\\xff\\xff\\xff\\xff\\xff\\xff\\x00\\xff\\xff\\xff\\xff\\xff\\xff\\xff\\xff\\xff\\xfe\\xff\\xff:/bin/qemu-ppc-static:OCF" --root=/chroot/powerpc/jessie /bin/bash -l
+.br
+Execute a chroot into the directory \fI/chroot/powerpc/jessie\fR and install
+the interpreter /bin/qemu-ppc-static to execute the powerpc binaries.
+If the interpreter is defined with the flag F, the interpreter is loaded
+before the chroot otherwise the interpreter is loaded from inside the chroot.
 
 .SH SEE ALSO
 .BR clone (2),

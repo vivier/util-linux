@@ -248,6 +248,31 @@ static void bind_ns_files_from_child(pid_t *child, int fds[2])
 	}
 }
 
+static int is_fixed(const char *interp)
+{
+	const char *flags;
+
+	flags = strrchr(interp, ':');
+
+	return strchr(flags, 'F') != NULL;
+}
+
+static void load_interp(const char *interp)
+{
+	int fd;
+
+	fd = open(_PATH_PROC_BINFMT_MISC_REGISTER, O_WRONLY);
+	if (fd < 0)
+		 err(EXIT_FAILURE, _("cannot open %s"),
+		     _PATH_PROC_BINFMT_MISC_REGISTER);
+
+	if (write_all(fd, interp, strlen(interp)))
+		err(EXIT_FAILURE, _("write failed %s"),
+		    _PATH_PROC_BINFMT_MISC_REGISTER);
+
+	close(fd);
+}
+
 static void __attribute__((__noreturn__)) usage(void)
 {
 	FILE *out = stdout;
@@ -275,6 +300,8 @@ static void __attribute__((__noreturn__)) usage(void)
 	fputs(_(" --kill-child[=<signame>]  when dying, kill the forked child (implies --fork)\n"
 		"                             defaults to SIGKILL\n"), out);
 	fputs(_(" --mount-proc[=<dir>]      mount proc filesystem first (implies --mount)\n"), out);
+	fputs(_(" --mount-binfmt[=<dir>]    mount binfmt filesystem first \n"
+		"                           (implies --user and --mount-proc)\n"), out);
 	fputs(_(" --propagation slave|shared|private|unchanged\n"
 	        "                           modify mount propagation in mount namespace\n"), out);
 	fputs(_(" --setgroups allow|deny    control the setgroups syscall in user namespaces\n"), out);
@@ -284,6 +311,8 @@ static void __attribute__((__noreturn__)) usage(void)
 	fputs(_(" -w, --wd=<dir>	    change working directory to <dir>\n"), out);
 	fputs(_(" -S, --setuid <uid>	    set uid in entered namespace\n"), out);
 	fputs(_(" -G, --setgid <gid>	    set gid in entered namespace\n"), out);
+	fputs(_(" -l, --load-interp <string> load binfmt definition in the namespace\n"
+		"                            (implies --mount-binfmt)\n"), out);
 
 	fputs(USAGE_SEPARATOR, out);
 	printf(USAGE_HELP_OPTIONS(27));
@@ -296,6 +325,7 @@ int main(int argc, char *argv[])
 {
 	enum {
 		OPT_MOUNTPROC = CHAR_MAX + 1,
+		OPT_MOUNTBINFMT,
 		OPT_PROPAGATION,
 		OPT_SETGROUPS,
 		OPT_KILLCHILD,
@@ -316,6 +346,7 @@ int main(int argc, char *argv[])
 		{ "fork",          no_argument,       NULL, 'f'             },
 		{ "kill-child",    optional_argument, NULL, OPT_KILLCHILD   },
 		{ "mount-proc",    optional_argument, NULL, OPT_MOUNTPROC   },
+		{ "mount-binfmt",  optional_argument, NULL, OPT_MOUNTBINFMT },
 		{ "map-root-user", no_argument,       NULL, 'r'             },
 		{ "map-current-user", no_argument,    NULL, 'c'             },
 		{ "propagation",   required_argument, NULL, OPT_PROPAGATION },
@@ -325,6 +356,7 @@ int main(int argc, char *argv[])
 		{ "setgid",	   required_argument, NULL, 'G'		    },
 		{ "root",	   required_argument, NULL, 'R'		    },
 		{ "wd",		   required_argument, NULL, 'w'		    },
+		{ "load-interp",   required_argument, NULL, 'l'		    },
 		{ NULL, 0, NULL, 0 }
 	};
 
@@ -333,8 +365,10 @@ int main(int argc, char *argv[])
 	int c, forkit = 0, mapuser = MAP_USER_NONE;
 	int kill_child_signo = 0; /* 0 means --kill-child was not used */
 	const char *procmnt = NULL;
+	const char *binfmt_mnt = NULL;
 	const char *newroot = NULL;
 	const char *newdir = NULL;
+	const char *newinterp = NULL;
 	pid_t pid = 0;
 	int fds[2];
 	int status;
@@ -349,7 +383,7 @@ int main(int argc, char *argv[])
 	textdomain(PACKAGE);
 	close_stdout_atexit();
 
-	while ((c = getopt_long(argc, argv, "+fhVmuinpCUrR:w:S:G:", longopts, NULL)) != -1) {
+	while ((c = getopt_long(argc, argv, "+fhVmuinpCUrR:w:S:G:l:", longopts, NULL)) != -1) {
 		switch (c) {
 		case 'f':
 			forkit = 1;
@@ -392,6 +426,10 @@ int main(int argc, char *argv[])
 		case OPT_MOUNTPROC:
 			unshare_flags |= CLONE_NEWNS;
 			procmnt = optarg ? optarg : "/proc";
+			break;
+		case OPT_MOUNTBINFMT:
+			unshare_flags |= CLONE_NEWNS | CLONE_NEWUSER;
+			binfmt_mnt = optarg ? optarg : _PATH_PROC_BINFMT_MISC;
 			break;
 		case 'r':
 			if (mapuser == MAP_USER_CURRENT)
@@ -442,6 +480,12 @@ int main(int argc, char *argv[])
 			break;
 		case 'w':
 			newdir = optarg;
+			break;
+		case 'l':
+			unshare_flags |= CLONE_NEWNS | CLONE_NEWUSER;
+			procmnt = procmnt ?: "/proc";
+			binfmt_mnt =  binfmt_mnt ?: _PATH_PROC_BINFMT_MISC;
+			newinterp = optarg;
 			break;
 
 		case 'h':
@@ -539,6 +583,14 @@ int main(int argc, char *argv[])
 	if ((unshare_flags & CLONE_NEWNS) && propagation)
 		set_propagation(propagation);
 
+	if (newinterp && is_fixed(newinterp)) {
+		if (mount("binfmt_misc", _PATH_PROC_BINFMT_MISC, "binfmt_misc",
+			  MS_NOSUID|MS_NOEXEC|MS_NODEV, NULL) != 0)
+			err(EXIT_FAILURE, _("mount %s failed"),
+			    _PATH_PROC_BINFMT_MISC);
+		load_interp(newinterp);
+	}
+
 	if (newroot) {
 		if (chroot(newroot) != 0)
 			err(EXIT_FAILURE,
@@ -553,6 +605,16 @@ int main(int argc, char *argv[])
 			err(EXIT_FAILURE, _("umount %s failed"), procmnt);
 		if (mount("proc", procmnt, "proc", MS_NOSUID|MS_NOEXEC|MS_NODEV, NULL) != 0)
 			err(EXIT_FAILURE, _("mount %s failed"), procmnt);
+	}
+
+	if (binfmt_mnt) {
+		if (mount("binfmt_misc", binfmt_mnt, "binfmt_misc",
+			  MS_NOSUID|MS_NOEXEC|MS_NODEV, NULL) != 0)
+			err(EXIT_FAILURE, _("mount %s failed"), binfmt_mnt);
+	}
+
+	if (newinterp && !is_fixed(newinterp)) {
+		 load_interp(newinterp);
 	}
 
 	if (force_gid) {
